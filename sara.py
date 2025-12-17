@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS admins (
 )
 """)
 
+# التأكد من وجود عمود description
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS content (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -83,13 +84,12 @@ def time_left_str(end_time: datetime, now: datetime) -> str:
     diff = end_time - now
     total_seconds = int(diff.total_seconds())
     if total_seconds <= 0:
-        return "انتهى."
+        return "منتهي"
     
     days = total_seconds // 86400
     hours = (total_seconds % 86400) // 3600
-    minutes = (total_seconds % 3600) // 60
     
-    # تنسيق الوقت ليكون قصيراً ومناسباً للشكل الجديد
+    # تنسيق مختصر
     return f"{days}يوم و {hours}ساعة"
 
 def parse_end_datetime(date_time_str: str, offset_hours: int = 0):
@@ -113,7 +113,6 @@ class UpdateContent(StatesGroup):
 
 # --- Command Handlers ---
 
-# ... (بقية أوامر البنرات والسفينة والتاور كما هي بدون تغيير) ...
 @dp.message(Command(
     'setbanner', 'setbanner_ar', 'setship_event', 'setship_event_ar', 'settower', 'settower_ar'
 ))
@@ -172,11 +171,8 @@ async def process_america_time(message: types.Message, state: FSMContext):
 @dp.message(UpdateContent.waiting_for_photo, F.content_type == types.ContentType.PHOTO)
 async def process_photo(message: types.Message, state: FSMContext):
     data = await state.get_data()
-    # (نفس كود الحفظ القديم للبنرات... تم اختصاره هنا للتركيز على التغييرات الجديدة)
-    # ... تنفيذ الحفظ ...
-    # هنا يجب وضع كود الحفظ الأصلي الموجود في ردودنا السابقة لقسم البنرات والتاور
-    # سأضع الكود الأساسي للحفظ لضمان العمل:
     section = data['section']
+    
     asia_offset = get_server_offset_hours('asia')
     europe_offset = get_server_offset_hours('europe')
     america_offset = get_server_offset_hours('america')
@@ -216,7 +212,7 @@ async def process_photo(message: types.Message, state: FSMContext):
 
 
 # ==========================================
-#  T H E   N E W   E V E N T   L O G I C
+#  T H E   E V E N T   L O G I C (UPDATED)
 # ==========================================
 
 @dp.message(Command('setevents', 'setevents_ar'))
@@ -226,29 +222,30 @@ async def cmd_start_update_events(message: types.Message, state: FSMContext):
         return
     await state.update_data(section='events')
     
-    # 🟢 التغيير 1: تحديث التعليمات لتشمل الوصف
+    # طلب البيانات بالشكل الجديد (الاسم والوقت والنبذة)
     await message.reply(
-        "أرسل البيانات بهذا الشكل لإضافة حدث جديد:\n"
-        "اسم الحدث ; YYYY-MM-DD HH:MM:SS ; نبذة عن الحدث\n\n"
-        "ملاحظة: الوقت بتوقيت **أوروبا (UTC+1)**.\n\n"
+        "أرسل البيانات بهذا الشكل:\n"
+        "**اسم الحدث ; الوقت ; نبذة عن الحدث**\n\n"
+        "⚠️ الوقت بتوقيت **أوروبا** (UTC+1)\n"
         "مثال:\n"
-        "Whispers of the Waves ; 2025-10-25 15:30:00 ; سيتم اعطائك مهمة تصوير مجموعة من الأماكن\n"
+        "Whispers of the Waves ; 2025-10-25 15:30:00 ; سيتم اعطائك مهمة تصوير\n"
     )
     await state.set_state(UpdateContent.waiting_for_event_text)
 
 @dp.message(UpdateContent.waiting_for_event_text, F.content_type == types.ContentType.TEXT)
 async def process_event_text(message: types.Message, state: FSMContext):
     text = message.text
-    # 🟢 التغيير 2: تقسيم النص إلى 3 أجزاء (الاسم، الوقت، الوصف)
+    # تقسيم النص إلى 3 أجزاء كحد أقصى
     parts = [p.strip() for p in text.split(";", 2)]
 
-    if len(parts) < 3:
-        await message.reply("❌ الخطأ في الصيغة.\nالصيغة:\nاسم الحدث ; الوقت ; الوصف")
+    if len(parts) < 2:
+        await message.reply("❌ الصيغة خطأ. أقل شيء يجب إرسال الاسم والوقت.")
         return
     
     name = parts[0]
     time_str = parts[1]
-    description = parts[2]
+    # إذا لم يكتب الوصف نتركه فارغاً
+    description = parts[2] if len(parts) > 2 else ""
     
     europe_offset = get_server_offset_hours('europe')
     end_time_utc = parse_end_datetime(time_str, offset_hours=europe_offset)
@@ -258,7 +255,6 @@ async def process_event_text(message: types.Message, state: FSMContext):
 
     end_time_str = end_time_utc.strftime("%Y-%m-%d %H:%M:%S")
     
-    # حفظ الوصف في قاعدة البيانات
     cursor.execute("""
         INSERT INTO content (section, name, end_time_europe, description) 
         VALUES (?, ?, ?, ?)
@@ -274,11 +270,10 @@ async def cmd_show_events(message: types.Message):
     now_utc = datetime.now(timezone.utc)
     now_str = now_utc.strftime("%Y-%m-%d %H:%M:%S")
 
-    # تنظيف الأحداث المنتهية
+    # حذف الأحداث المنتهية
     cursor.execute("DELETE FROM content WHERE section='events' AND end_time_europe <= ?", (now_str,))
     conn.commit()
 
-    # 🟢 التغيير 3: استدعاء الوصف وتعديل الشكل النهائي
     cursor.execute("SELECT id, name, end_time_europe, description FROM content WHERE section='events'")
     events = cursor.fetchall()
     
@@ -293,20 +288,61 @@ async def cmd_show_events(message: types.Message):
         end_time_utc = datetime.strptime(end_time_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
         time_left = time_left_str(end_time_utc, now_utc)
         
-        # تحديد الأيقونة: الأول يأخذ الشكل المميز، والباقي الشكل العادي
-        icon = "❖" if i == 0 else "✦"
+        # التنسيق المطلوب
+        if i == 0:
+            # الحدث الرئيسي
+            text += f"❖الأيفنت الرئيسي [{name}]\n"
+        else:
+            # الأحداث الفرعية
+            text += f"✦ايفنت [{name}]\n"
         
-        # بناء نص الحدث بالشكل المطلوب
-        text += f"{icon} {name}\n"
         if description:
             text += f"-نبذة عن الأيفنت:\n{description}\n\n"
         
-        text += f"المهلة المتبقية: {time_left}\n"
-        text += "༺━━━━━━━━━━━━━━━━━━━━━━༻\n"
+        # إضافة الخط الفاصل بجانب المهلة كما في طلبك
+        text += f"المهلة المتبقية: {time_left} ༺━━━━━━━━━━━━━━━━━━━━━━༻\n"
 
     await message.reply(text, parse_mode="Markdown")
 
-# ... (بقية الأكواد: handlers الحذف، الأوامر، المالك، والتنبيهات تبقى كما هي) ...
+# ... (باقي الأكواد دون تغيير) ...
+
+@dp.message(Command('the_banner', 'ship_event', 'tower'))
+@dp.message(F.text.lower().in_(['البنر', 'السفينة', 'التاور']))
+async def cmd_show_content_single(message: types.Message, command: Command = None):
+    # (نفس دالة العرض القديمة للبنر والسفينة)
+    section_map = {
+        'the_banner': 'banner', 'البنر': 'banner',
+        'ship_event': 'stygian', 'السفينة': 'stygian',
+        'tower': 'spiral_abyss', 'التاور': 'spiral_abyss',
+    }
+    if command: section_key = section_map.get(command.command)
+    else: section_key = section_map.get(message.text.lower())
+    if not section_key: return
+    
+    cursor.execute("SELECT title, name, end_time_asia, end_time_europe, end_time_america, image_file_id FROM content WHERE section=?", (section_key,))
+    row = cursor.fetchone()
+    if not row:
+        await message.reply(f"لا يوجد محتوى مضاف.")
+        return
+    
+    title, name, end_time_asia, end_time_europe, end_time_america, file_id = row
+    text = f"🔹 **{title if title else 'المحتوى'} :**\n\n"
+    if section_key == 'banner' and name: text += f"**{name}**\n\n"
+    
+    times_dict = {'end_time_asia': end_time_asia, 'end_time_europe': end_time_europe, 'end_time_america': end_time_america}
+    server_map = {'asia': 'اسيا', 'europe': 'اوروبا', 'america': 'امريكا'}
+    now_utc = datetime.now(timezone.utc)
+    
+    for k, v in times_dict.items():
+        if not v: continue
+        srv = k.replace("end_time_", "")
+        srv_ar = server_map.get(srv, srv)
+        end_utc = datetime.strptime(v, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        tl = time_left_str(end_utc, now_utc)
+        text += f"⏳الوقت المتبقي سيرفر {srv_ar} :\n ●← {tl}\n\n"
+    
+    if file_id: await message.reply_photo(photo=file_id, caption=text, parse_mode="Markdown")
+    else: await message.reply(text, parse_mode="Markdown")
 
 @dp.message(Command('delevents'))
 async def cmd_delete_events(message: types.Message):
@@ -316,7 +352,51 @@ async def cmd_delete_events(message: types.Message):
     conn.commit()
     await message.reply("✅ تم حذف جميع الأحداث.")
 
-# --- Alert System (No changes needed logic-wise, but ensure main runs it) ---
+@dp.message(F.text.lower().in_(['الاوامر']))
+async def cmd_custom_commands(message: types.Message):
+    await message.reply(
+        "اوامر غالبرينا :\n\n"
+        "/the_banner البنر \n"
+        "/ship_event السفينة \n"
+        "/tower التاور \n"
+        "/event الاحداث"
+    )
+
+@dp.message(Command('addadmin'))
+async def cmd_addadmin(message: types.Message):
+    if message.from_user.id != OWNER_ID: return
+    try:
+        new_id = int(message.text.split()[1])
+        cursor.execute("INSERT OR IGNORE INTO admins (user_id) VALUES (?)", (new_id,))
+        conn.commit()
+        await message.reply("✅ تم.")
+    except: await message.reply("خطأ.")
+
+@dp.message(Command('removeadmin'))
+async def cmd_removeadmin(message: types.Message):
+    if message.from_user.id != OWNER_ID: return
+    try:
+        rem_id = int(message.text.split()[1])
+        cursor.execute("DELETE FROM admins WHERE user_id = ?", (rem_id,))
+        conn.commit()
+        await message.reply("✅ تم.")
+    except: await message.reply("خطأ.")
+
+@dp.message(Command('start', 'help'))
+async def cmd_start(message: types.Message):
+    await message.reply("مرحبًا بك في بوت غالبرينا!")
+
+@dp.message(F.text.lower().in_(['مين حبيبة ماما', 'مين روح ماما', 'مين هطف القروب']))
+async def handle_owner_questions(message: types.Message):
+    if message.from_user.id == OWNER_ID:
+        if message.text.lower() == 'مين هطف القروب': await message.reply("برهم")
+        else: await message.reply("انا")
+
+@dp.message(F.text.lower() == 'غوغو انتي تردي على احد غيري؟')
+async def handle_gogo_owner_question(message: types.Message):
+    if message.from_user.id == OWNER_ID: await message.reply("لا ماما انتي بس")
+
+# --- Alert System ---
 async def check_and_send_alerts():
     ONE_HOUR_THRESHOLD = 3600
     while True:
@@ -362,13 +442,9 @@ def format_alert_message(content_row: tuple, server: str, alert_type: str) -> st
     content_id, section, title, name, end_time_asia, end_time_europe, end_time_america, description, image_file_id = content_row
     display_name = title if title and section != 'events' else (name if name else section)
     if section == 'events': display_name = name
-    
     server_ar = {'asia': 'آسيا', 'europe': 'أوروبا', 'america': 'أمريكا'}.get(server, server)
-    
-    if alert_type == '1_hour_remaining':
-        return f"🚨 **تنبيه!**\nباقي ساعة على انتهاء **{display_name}** ({server_ar})!"
-    elif alert_type == 'expired':
-        return f"✅ **انتهى!**\nانتهى **{display_name}** ({server_ar})."
+    if alert_type == '1_hour_remaining': return f"🚨 **تنبيه!**\nباقي ساعة على انتهاء **{display_name}** ({server_ar})!"
+    elif alert_type == 'expired': return f"✅ **انتهى!**\nانتهى **{display_name}** ({server_ar})."
     return ""
 
 def was_alert_sent(content_id: int, server: str, alert_type: str) -> bool:
@@ -379,7 +455,6 @@ def mark_alert_sent(content_id: int, server: str, alert_type: str):
     cursor.execute("INSERT OR IGNORE INTO sent_alerts (content_id, server, alert_type) VALUES (?, ?, ?)", (content_id, server, alert_type))
     conn.commit()
 
-# --- Main ---
 async def main():
     if TARGET_CHAT_ID: asyncio.create_task(check_and_send_alerts())
     await dp.start_polling(bot)
