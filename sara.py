@@ -120,7 +120,7 @@ class UpdateContent(StatesGroup):
     waiting_for_america_time = State()
     waiting_for_photo = State()
 
-# --- Command Handlers (Existing code kept for context) ---
+# --- Command Handlers ---
 
 # Unified handler for setting commands
 @dp.message(Command(
@@ -173,7 +173,7 @@ async def cmd_start_update_events(message: types.Message, state: FSMContext):
     await message.reply(
         "أرسل البيانات بهذا الشكل لإضافة حدث جديد:\n"
         "اسم الحدث ; YYYY-MM-DD HH:MM:SS\n"
-        "ملاحظة: الوقت الذي ترسله هو **بتوقيت سيرفر آسيا (UTC+8)**.\n"
+        "ملاحظة: الوقت الذي ترسله هو **بتوقيت سيرفر أوروبا (UTC+1)**.\n"
         "مثال:\n"
         "حدث جديد ; 2025-10-25 15:30:00\n"
     )
@@ -216,20 +216,22 @@ async def process_event_text(message: types.Message, state: FSMContext):
         return
     
     name = parts[0]
-    # Use parse_end_datetime with Asia's offset
-    asia_offset = get_server_offset_hours('asia')
-    end_time_utc = parse_end_datetime(parts[1], offset_hours=asia_offset)
+    # UPDATED: Use parse_end_datetime with EUROPE's offset
+    europe_offset = get_server_offset_hours('europe')
+    end_time_utc = parse_end_datetime(parts[1], offset_hours=europe_offset)
     if not end_time_utc:
         await message.reply("❌ تنسيق التاريخ والوقت غير صحيح. استخدم الصيغة `YYYY-MM-DD HH:MM:SS`.")
         return
 
     end_time_str = end_time_utc.strftime("%Y-%m-%d %H:%M:%S")
+    
+    # UPDATED: Insert into end_time_europe instead of end_time_asia
     cursor.execute("""
-        INSERT INTO content (section, name, end_time_asia) 
+        INSERT INTO content (section, name, end_time_europe) 
         VALUES (?, ?, ?)
     """, ('events', name, end_time_str))
     conn.commit()
-    await message.reply(f"✅ تم إضافة حدث جديد بنجاح. **(الوقت المخزن هو UTC بناءً على وقت آسيا المدخل)**")
+    await message.reply(f"✅ تم إضافة حدث جديد بنجاح. **(الوقت المخزن هو UTC بناءً على وقت أوروبا المدخل)**")
     await state.clear()
 
 @dp.message(UpdateContent.waiting_for_asia_time, F.content_type == types.ContentType.TEXT)
@@ -397,18 +399,19 @@ async def cmd_show_content_single(message: types.Message, command: Command = Non
     else:
         await message.reply(text, parse_mode="Markdown")
 
-# Unified handler for events (kept for reference)
+# Unified handler for events (UPDATED to use Europe time)
 @dp.message(Command('events', 'event'))
 @dp.message(F.text.lower().in_(['الاحداث']))
 async def cmd_show_events(message: types.Message):
     now_utc = datetime.now(timezone.utc)
     now_str = now_utc.strftime("%Y-%m-%d %H:%M:%S")
 
-    # Clean up expired events. Note: This assumes only end_time_asia is set for events
-    cursor.execute("DELETE FROM content WHERE section='events' AND end_time_asia <= ?", (now_str,))
+    # UPDATED: Clean up expired events based on end_time_europe
+    cursor.execute("DELETE FROM content WHERE section='events' AND end_time_europe <= ?", (now_str,))
     conn.commit()
 
-    cursor.execute("SELECT id, name, end_time_asia FROM content WHERE section='events'")
+    # UPDATED: Select end_time_europe
+    cursor.execute("SELECT id, name, end_time_europe FROM content WHERE section='events'")
     events = cursor.fetchall()
     
     if not events:
@@ -422,12 +425,13 @@ async def cmd_show_events(message: types.Message):
         time_left = time_left_str(end_time_utc, now_utc)
         
         text += f"**{i+1}. {name}**\n\n"
-        text += f"⏳الوقت المتبقي (وقت آسيا المعتمد للأحداث)\n{time_left}\n"
+        # UPDATED: Label to Europe
+        text += f"⏳الوقت المتبقي (وقت أوروبا المعتمد للأحداث)\n{time_left}\n"
         text += "---\n"
 
     await message.reply(text, parse_mode="Markdown")
 
-# Unified handler for deleting events (kept for reference)
+# Unified handler for deleting events
 @dp.message(Command('delevents'))
 @dp.message(F.text.lower().in_(['حذف_الاحداث']))
 async def cmd_delete_events(message: types.Message):
@@ -441,7 +445,7 @@ async def cmd_delete_events(message: types.Message):
     conn.commit()
     await message.reply("✅ تم حذف جميع الأحداث بنجاح.")
 
-# New handler for the custom 'الاوامر' command (kept for reference)
+# New handler for the custom 'الاوامر' command
 @dp.message(F.text.lower().in_(['الاوامر']))
 async def cmd_custom_commands(message: types.Message):
     await message.reply(
@@ -452,7 +456,7 @@ async def cmd_custom_commands(message: types.Message):
         "/event الاحداث او"
     )
 
-# Unified handler for adding admin (kept for reference)
+# Unified handler for adding admin
 @dp.message(Command('addadmin'))
 @dp.message(F.text.lower().startswith('اضافة_مشرف'))
 async def cmd_addadmin(message: types.Message, command: Command=None):
@@ -476,7 +480,7 @@ async def cmd_addadmin(message: types.Message, command: Command=None):
     except (ValueError, IndexError):
         await message.reply("❌ حدث خطأ أثناء الإضافة. يرجى التأكد من أن المعرف هو رقم صحيح.")
 
-# Unified handler for removing admin (kept for reference)
+# Unified handler for removing admin
 @dp.message(Command('removeadmin'))
 @dp.message(F.text.lower().startswith('ازالة_مشرف'))
 async def cmd_removeadmin(message: types.Message, command: Command=None):
@@ -503,7 +507,7 @@ async def cmd_removeadmin(message: types.Message, command: Command=None):
     except (ValueError, IndexError):
         await message.reply("❌ حدث خطأ أثناء الحذف. يرجى التأكد من أن المعرف هو رقم صحيح.")
 
-# Unified handler for start/help message (kept for reference)
+# Unified handler for start/help message
 @dp.message(Command('start', 'help'))
 @dp.message(F.text.lower().in_(['بدء']))
 async def cmd_start(message: types.Message):
@@ -525,7 +529,7 @@ async def cmd_start(message: types.Message):
         "removeadmin [user_id] أو ازالة_مشرف [user_id]"
     )
 
-# ردود المالك الخاصة (kept for reference)
+# ردود المالك الخاصة
 @dp.message(F.text.lower().in_(['مين حبيبة ماما', 'مين روح ماما', 'مين هطف القروب']))
 async def handle_owner_questions(message: types.Message):
     if message.from_user.id == OWNER_ID:
@@ -534,7 +538,7 @@ async def handle_owner_questions(message: types.Message):
         else:
             await message.reply("انا")
 
-# رد المالك على سؤال "غوغو" (kept for reference)
+# رد المالك على سؤال "غوغو"
 @dp.message(F.text.lower() == 'غوغو انتي تردي على احد غيري؟')
 async def handle_gogo_owner_question(message: types.Message):
     if message.from_user.id == OWNER_ID:
@@ -569,7 +573,7 @@ def format_alert_message(content_row: tuple, server: str, alert_type: str) -> st
     display_name = title if title and section != 'events' else (name if name else arabic_section)
     
     if section == 'events':
-        # Events use only the name field and end_time_asia
+        # Events use only the name field and end_time_europe (now)
         display_name = name if name else arabic_section
         
     if alert_type == '1_hour_remaining':
@@ -612,10 +616,10 @@ async def check_and_send_alerts():
         for row in all_content:
             content_id, section, title, name, end_time_asia, end_time_europe, end_time_america, description, image_file_id = row
             
-            # Special handling for 'events' section: it only uses end_time_asia
+            # UPDATED: Special handling for 'events' section: it now uses end_time_europe
             time_columns = {
-                'asia': end_time_asia,
-                'europe': end_time_europe if section != 'events' else None,
+                'asia': end_time_asia if section != 'events' else None,
+                'europe': end_time_europe,
                 'america': end_time_america if section != 'events' else None
             }
             
